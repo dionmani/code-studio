@@ -1,0 +1,619 @@
+{% load static assets %}<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Code Studio</title>
+  <link rel="icon" type="image/png" href="{% asset 'ide/icon.png' %}">
+  <link rel="stylesheet" href="{% asset 'vendor/bootstrap/bootstrap.min.css' %}">
+  <link rel="stylesheet" data-name="vs/editor/editor.main" href="{% static 'vendor/monaco/vs/editor/editor.main.css' %}">
+{% if system_terminal %}  <link rel="stylesheet" href="{% asset 'vendor/xterm/xterm.css' %}">
+{% endif %}  <link rel="stylesheet" href="{% asset 'ide/ide.css' %}">
+</head>
+<body data-user="{{ request.user.username }}" data-staff="{{ request.user.is_staff|yesno:'1,0' }}"
+      data-local-install="{{ local_install|yesno:'1,0' }}" data-system-terminal="{{ system_terminal|yesno:'1,0' }}"
+      data-monaco="{% static 'vendor/monaco/vs' %}">
+<div id="app" class="ide">
+  <!-- ===== Header ===== -->
+  <header class="ide-header navbar navbar-expand px-2">
+    <span class="navbar-brand fw-semibold me-3">Code Studio</span>
+    <select id="project-select" class="form-select form-select-sm w-auto me-2" aria-label="Active project">
+      <option value="">— select project —</option>
+    </select>
+    <span id="git-badge" class="badge text-bg-secondary me-2" title="Project mode">no project</span>
+    <span id="engine-badge" class="badge text-bg-secondary me-auto" title="Agent Engine status">engine: checking…</span>
+    {% if offer_local %}<a id="run-locally" class="btn btn-sm btn-outline-info me-2" href="{% url 'local' %}"
+       title="Install Code Studio on this Windows PC">Run Locally</a>{% endif %}
+    {% if local_install %}<a id="update-badge" class="badge text-bg-warning text-decoration-none me-2 d-none"
+       href="{% url 'local' %}" title="A newer build is on the server">Update available</a>{% endif %}
+    <button id="mobile-toggle" class="btn btn-sm btn-outline-secondary d-md-none me-2" type="button">Panels</button>
+    <div class="dropdown">
+      <button class="btn btn-sm btn-outline-light dropdown-toggle" data-bs-toggle="dropdown" type="button" id="user-menu">
+        {{ request.user.username }}
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        <li><button class="dropdown-item" type="button" id="settings-item">Settings…</button></li>
+        {% if request.user.is_staff %}<li><a class="dropdown-item" href="/admin/">Admin</a></li>{% endif %}
+        <li><a class="dropdown-item" href="{% url 'local' %}" id="version-item">{% if local_install %}Local copy{% else %}Run locally{% endif %} · v{{ build.version }} <span class="text-body-secondary small">({{ build.build }})</span></a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li>
+          <form method="post" action="{% url 'logout' %}" class="m-0">{% csrf_token %}
+            <button class="dropdown-item" type="submit" id="logout-btn">Sign out</button>
+          </form>
+        </li>
+      </ul>
+    </div>
+  </header>
+
+  <!-- resize handles for the side panels (positioned from --cs-left / --cs-right) -->
+  <div class="splitter splitter-v" id="split-left" role="separator" aria-orientation="vertical"
+       aria-controls="left-panel" aria-label="Resize left panel" tabindex="0"
+       title="Drag to resize · double-click to reset"></div>
+  <div class="splitter splitter-v" id="split-right" role="separator" aria-orientation="vertical"
+       aria-controls="right-panel" aria-label="Resize right panel" tabindex="0"
+       title="Drag to resize · double-click to reset"></div>
+
+  <!-- ===== Left sidebar ===== -->
+  <aside class="ide-left panel" id="left-panel">
+    <ul class="nav nav-tabs nav-tabs-sm" role="tablist">
+      <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-explorer" type="button" id="tabbtn-explorer">Files</button></li>
+      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-search" type="button" id="tabbtn-search">Search</button></li>
+      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-git" type="button" id="tabbtn-git">Git</button></li>
+      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-projects" type="button" id="tabbtn-projects">Projects</button></li>
+    </ul>
+    <div class="tab-content panel-body">
+      <section class="tab-pane fade show active" id="tab-explorer">
+        <div class="toolbar">
+          <button class="btn btn-xs" id="btn-new-file" title="New file">+ File</button>
+          <button class="btn btn-xs" id="btn-new-folder" title="New folder">+ Folder</button>
+          <button class="btn btn-xs" id="btn-rename" title="Rename selected">Rename</button>
+          <button class="btn btn-xs text-danger" id="btn-delete" title="Delete selected">Delete</button>
+          <button class="btn btn-xs" id="btn-refresh-tree" title="Refresh">⟳</button>
+        </div>
+        <div id="file-tree" class="file-tree" role="tree"><div class="empty">Select or register a project.</div></div>
+      </section>
+      <section class="tab-pane fade" id="tab-search">
+        <form id="search-form" class="p-2">
+          <input class="form-control form-control-sm mb-1" id="search-input" placeholder="Search in project" autocomplete="off">
+          <div class="d-flex gap-2 small">
+            <label><input type="checkbox" id="search-regex"> Regex</label>
+            <label><input type="checkbox" id="search-case"> Match case</label>
+            <button class="btn btn-xs btn-primary ms-auto" type="submit">Search</button>
+          </div>
+        </form>
+        <div id="search-results" class="list small"></div>
+      </section>
+      <section class="tab-pane fade" id="tab-git">
+        <div id="git-panel" class="p-2 small"><div class="empty">Select a project.</div></div>
+      </section>
+      <section class="tab-pane fade" id="tab-projects">
+        <div class="p-2 small">
+          <h6 class="section-title">Projects</h6>
+          <div id="project-list" class="list mb-3"></div>
+          <div id="register-section">
+            <h6 class="section-title">Register a project folder</h6>
+            <form id="register-form" class="vstack gap-1">
+              <select id="reg-root" class="form-select form-select-sm" required></select>
+              <div class="input-group input-group-sm">
+                <input id="reg-path" class="form-control" placeholder="relative/path (blank = root)">
+                <button class="btn btn-outline-secondary" type="button" id="reg-browse">Browse</button>
+              </div>
+              <div id="reg-browser" class="list browser d-none"></div>
+              <input id="reg-name" class="form-control form-control-sm" placeholder="Display name (optional)">
+              <button class="btn btn-sm btn-primary" type="submit">Register</button>
+              <div class="text-body-secondary">Git is detected automatically. Folders without Git stay unmanaged — Code Studio never runs <code>git init</code>.</div>
+            </form>
+          </div>
+          <div id="roots-section" class="mt-3">
+            <h6 class="section-title">Allowlisted roots</h6>
+            <div id="root-list" class="list mb-2"></div>
+            <form id="root-form" class="vstack gap-1 staff-only">
+              <input id="root-alias" class="form-control form-control-sm" placeholder="alias (e.g. projects)" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*">
+              <input id="root-path" class="form-control form-control-sm" placeholder="Absolute path, e.g. D:\Projects" required>
+              <button class="btn btn-sm btn-outline-primary" type="submit">Add root</button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <!-- ===== Center: editor ===== -->
+  <main class="ide-center">
+    <div class="editor-tabs" id="editor-tabs" role="tablist"></div>
+    <div class="editor-toolbar" id="editor-toolbar">
+      <span id="editor-status" class="text-body-secondary small">No file open</span>
+      <span class="ms-auto"></span>
+      <button class="btn btn-xs d-none" id="btn-diff-close">Close diff</button>
+      <button class="btn btn-xs btn-primary" id="btn-save" disabled>Save (Ctrl+S)</button>
+    </div>
+    <div class="editor-host">
+      <div id="editor" class="editor"></div>
+      <div id="diff-editor" class="editor d-none"></div>
+      <div id="editor-placeholder" class="editor-placeholder">
+        <div>
+          <h5>Welcome to Code Studio</h5>
+          <p class="text-body-secondary small">Open a file from the explorer. Agent changes are reviewed in the right panel before they touch your project.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="splitter splitter-h" id="split-bottom" role="separator" aria-orientation="horizontal"
+         aria-controls="bottom-panel" aria-label="Resize bottom panel" tabindex="0"
+         title="Drag to resize · double-click to reset"></div>
+    <!-- ===== Bottom panel ===== -->
+    <section class="ide-bottom panel" id="bottom-panel">
+      <ul class="nav nav-tabs nav-tabs-sm">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-terminal" type="button" id="tabbtn-terminal">Terminal</button></li>
+        {% if system_terminal %}<li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-systerm" type="button" id="tabbtn-systerm" title="Your real shell with profile, environment and full paths (local copy only)">System terminal</button></li>{% endif %}
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-problems" type="button" id="tabbtn-problems">Problems <span id="problem-count" class="badge text-bg-secondary">0</span></button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-tasksummary" type="button" id="tabbtn-tasksummary">Task summary</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-tasklog" type="button" id="tabbtn-tasklog">Task log</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-recovery" type="button" id="tabbtn-recovery">Recovery</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-audit" type="button" id="tabbtn-audit">Audit</button></li>
+      </ul>
+      <div class="tab-content panel-body">
+        <div class="tab-pane fade show active h-100" id="tab-terminal">
+          <div class="terminal" id="terminal">
+            <pre id="term-output" class="term-output" aria-live="polite"></pre>
+            <form id="term-form" class="term-input-row">
+              <span id="term-prompt" class="term-prompt">~&gt;</span>
+              <input id="term-input" class="term-input" autocomplete="off" spellcheck="false" placeholder="Connect by selecting a project" disabled>
+              <select id="term-shell" class="form-select form-select-sm w-auto"><option value="powershell">PowerShell</option><option value="cmd">cmd</option></select>
+              <button class="btn btn-xs btn-outline-danger" type="button" id="term-stop">Stop</button>
+              <button class="btn btn-xs" type="button" id="term-clear">Clear</button>
+            </form>
+          </div>
+        </div>
+        {% if system_terminal %}<div class="tab-pane fade h-100" id="tab-systerm">
+          <div class="systerm">
+            <div class="systerm-bar">
+              <span class="systerm-warn" title="Not restricted to the project: runs with your full Windows user permissions">Unrestricted · your user account</span>
+              <span id="systerm-status" class="systerm-status">not started</span>
+              <select id="systerm-shell" class="form-select form-select-sm w-auto ms-auto" aria-label="System terminal shell"></select>
+              <button class="btn btn-xs" type="button" id="systerm-restart" title="Start a new shell in the project root">Restart</button>
+              <button class="btn btn-xs btn-outline-danger" type="button" id="systerm-kill" title="End the shell and everything it started">Kill</button>
+            </div>
+            <div id="systerm-host" class="systerm-host"></div>
+          </div>
+        </div>{% endif %}
+        <div class="tab-pane fade" id="tab-problems"><div id="problems" class="list small"><div class="empty">No problems.</div></div></div>
+        <div class="tab-pane fade h-100" id="tab-tasksummary">
+          <div id="task-summary" class="task-summary" aria-live="polite"><div class="empty">Select a task to see what the agents did and what they replied.</div></div>
+        </div>
+        <div class="tab-pane fade h-100" id="tab-tasklog"><pre id="task-log" class="term-output small">Select a task to view its log.</pre></div>
+        <div class="tab-pane fade" id="tab-recovery">
+          <div class="toolbar"><button class="btn btn-xs" id="btn-refresh-snapshots">⟳ Refresh</button><span class="small text-body-secondary">Snapshots are taken before deletes, forced overwrites, agent applies and restores.</span></div>
+          <div id="snapshot-list" class="list small"></div>
+        </div>
+        <div class="tab-pane fade" id="tab-audit">
+          <div class="toolbar"><button class="btn btn-xs" id="btn-refresh-audit">⟳ Refresh</button></div>
+          <div id="audit-list" class="list small mono"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Right panel ===== -->
+  <aside class="ide-right panel" id="right-panel">
+    <div class="panel-body p-2 small">
+      <div id="engine-offline-banner" class="alert alert-warning py-1 px-2 d-none">Agent Engine is offline. Editing, Git and the terminal keep working; agent tasks are unavailable.</div>
+      <h6 class="section-title d-flex align-items-center">New task
+        <button class="btn btn-xs ms-auto" id="btn-agent-settings" type="button" title="Agent team, profiles and default lineup">⚙ Agents</button></h6>
+      <form id="task-form" class="vstack gap-1 mb-3">
+        <textarea id="task-objective" class="form-control form-control-sm" rows="4" placeholder="Describe the objective… (paste or drop screenshots here)" required></textarea>
+        <div id="task-images" class="attach"></div>
+        <div id="task-pipeline" class="task-lineup" aria-live="polite"><span class="lineup-note">Loading agents…</span></div>
+        <details id="task-change">
+          <summary class="meta">Change for this task</summary>
+          <div class="meta mt-1">Tick agents in the order they should run. This changes this task only.</div>
+          <div id="task-assignments" class="list mt-1"></div>
+          <div class="d-flex align-items-center gap-2 mt-1">
+            <button class="btn btn-xs btn-outline-secondary" id="task-reset" type="button">Reset to default lineup</button>
+            <button class="btn btn-xs btn-link ms-auto p-0" id="task-edit-default" type="button">Edit default lineup…</button>
+          </div>
+        </details>
+        <button class="btn btn-sm btn-primary" type="submit" id="task-submit">Submit task</button>
+      </form>
+
+      <h6 class="section-title d-flex">Task queue <button class="btn btn-xs ms-auto" id="btn-refresh-tasks">⟳</button></h6>
+      <div id="task-list" class="list mb-3"></div>
+
+      <div id="review-section" class="d-none">
+        <h6 class="section-title">Selected task</h6>
+        <div id="review-meta" class="review-meta mb-2"></div>
+        <div id="review-files" class="list mb-2"></div>
+        <button class="btn btn-sm btn-outline-info w-100 mb-2" id="btn-task-summary" type="button">📄 View task summary</button>
+        <div class="d-flex gap-1">
+          <button class="btn btn-sm btn-success" id="btn-approve">Approve &amp; apply selected</button>
+          <button class="btn btn-sm btn-outline-danger" id="btn-reject">Reject</button>
+          <button class="btn btn-sm btn-outline-warning ms-auto" id="btn-cancel-task">Cancel task</button>
+        </div>
+        <div id="followup-box" class="d-none mt-3">
+          <h6 class="section-title">Follow up</h6>
+          <div id="followup-unavailable" class="meta d-none"></div>
+          <form id="followup-form" class="d-none">
+            <label class="form-label small mb-1" for="followup-step">Continue the conversation with</label>
+            <select id="followup-step" class="form-select form-select-sm mb-1"></select>
+            <textarea id="followup-message" class="form-control form-control-sm mb-1" rows="3" maxlength="20000"
+                      placeholder="Tell the agent what to change or do next…" required></textarea>
+            <div id="followup-images" class="attach mb-1"></div>
+            <div class="d-flex gap-1 align-items-center">
+              <select id="followup-access" class="form-select form-select-sm w-auto" aria-label="File access for this follow-up">
+                <option value="">Same access as before</option>
+                <option value="edit">Can edit files</option>
+                <option value="read">Read-only</option>
+              </select>
+              <button class="btn btn-sm btn-primary ms-auto" id="btn-followup" type="submit">Send follow-up</button>
+            </div>
+            <div class="meta mt-1">The agent picks up where it stopped, in the same working copy. Its new edits join this task's changes, so you review everything together. Ctrl+Enter sends.</div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- ===== Modals ===== -->
+<div class="modal fade" id="dialog-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header py-2"><h5 class="modal-title h6" id="dialog-title">Confirm</h5></div>
+    <div class="modal-body small" id="dialog-body"></div>
+    <div class="modal-body pt-0 d-none" id="dialog-input-wrap"><input class="form-control form-control-sm" id="dialog-input" autocomplete="off"></div>
+    <div class="modal-footer py-1">
+      <button class="btn btn-sm btn-secondary" id="dialog-cancel" type="button">Cancel</button>
+      <button class="btn btn-sm btn-primary" id="dialog-ok" type="button">OK</button>
+    </div>
+  </div></div>
+</div>
+
+<div class="modal fade" id="summary-modal" tabindex="-1" aria-hidden="true" aria-labelledby="summary-modal-title">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable modal-fullscreen-lg-down"><div class="modal-content">
+    <div class="modal-header py-2">
+      <h5 class="modal-title h6" id="summary-modal-title">Task summary</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    </div>
+    <div class="modal-body"><div id="summary-modal-body" class="task-summary"></div></div>
+  </div></div>
+</div>
+
+<div class="modal fade" id="step-modal" tabindex="-1" aria-hidden="true" aria-labelledby="step-modal-title">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable modal-fullscreen-lg-down"><div class="modal-content">
+    <div class="modal-header py-2">
+      <h5 class="modal-title h6" id="step-modal-title">Step output</h5>
+      <span class="meta ms-2 mono small" id="step-modal-file"></span>
+      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    </div>
+    <div class="modal-body"><div id="step-modal-body" class="task-summary"></div></div>
+    <div class="modal-footer py-1">
+      <button class="btn btn-sm" id="step-modal-copy" type="button">⧉ Copy Markdown</button>
+      <button class="btn btn-sm" id="step-modal-download" type="button">⭳ Download .md</button>
+    </div>
+  </div></div>
+</div>
+
+<div class="modal fade" id="settings-modal" tabindex="-1" aria-hidden="true" aria-labelledby="settings-title">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable modal-fullscreen-md-down"><div class="modal-content">
+    <div class="modal-header py-2">
+      <h5 class="modal-title h6" id="settings-title">Settings</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    </div>
+    <div class="modal-body small p-0">
+      <div class="settings-layout">
+        <nav class="settings-nav nav nav-pills" role="tablist" aria-label="Settings sections">
+          <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#settings-agents" type="button" role="tab"
+                  id="settings-tab-agents" aria-controls="settings-agents" aria-selected="true">Agent team</button>
+          <button class="nav-link" data-bs-toggle="pill" data-bs-target="#settings-profiles" type="button" role="tab"
+                  id="settings-tab-profiles" aria-controls="settings-profiles" aria-selected="false">Profiles</button>
+          <button class="nav-link" data-bs-toggle="pill" data-bs-target="#settings-lineup" type="button" role="tab"
+                  id="settings-tab-lineup" aria-controls="settings-lineup" aria-selected="false">Default lineup</button>
+          <button class="nav-link" data-bs-toggle="pill" data-bs-target="#settings-checks" type="button" role="tab"
+                  id="settings-tab-checks" aria-controls="settings-checks" aria-selected="false">Project checks</button>
+        </nav>
+        <div class="tab-content settings-content">
+
+          <!-- agent team -->
+          <section class="tab-pane fade show active" id="settings-agents" role="tabpanel" aria-labelledby="settings-tab-agents">
+            <h6 class="d-flex align-items-center">Agent team
+              <button class="btn btn-xs btn-outline-secondary ms-auto" id="btn-refresh-agents" type="button">⟳ Check again</button></h6>
+            <p class="text-body-secondary mb-2">The AI tools the Agent Engine found and whether each is ready.
+              Profiles (next section) decide how they are used.</p>
+            <div id="adapter-list" class="list"></div>
+          </section>
+
+          <!-- profiles -->
+          <section class="tab-pane fade" id="settings-profiles" role="tabpanel" aria-labelledby="settings-tab-profiles">
+            <h6 id="pm-title">Agent profiles</h6>
+            <div id="pm-list-view">
+              <p class="text-body-secondary mb-2">A profile is a ready-made agent setup: which AI tool runs, what job it does,
+                and whether it may change files. Put profiles in your default lineup to use them for new tasks.</p>
+              <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle mb-2" id="pm-table">
+                  <thead><tr><th>Name</th><th>Agent</th><th>Role</th><th>Access</th><th class="text-center">Enabled</th><th></th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div id="pm-readonly-note" class="text-body-secondary d-none">Only administrators can change profiles.</div>
+            </div>
+
+            <!-- add / edit view -->
+            <form class="d-none" id="pm-form" novalidate autocomplete="off">
+              <div class="mb-3">
+                <label class="form-label fw-semibold" for="pm-adapter">Agent</label>
+                <select class="form-select form-select-sm" id="pm-adapter" required></select>
+                <div class="form-text" id="pm-adapter-status"></div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label fw-semibold" for="pm-role">Role</label>
+                <div class="d-flex flex-wrap gap-1 mb-1" id="pm-role-chips"></div>
+                <input class="form-control form-control-sm" id="pm-role" list="pm-role-options" maxlength="64" required>
+                <datalist id="pm-role-options"></datalist>
+                <div class="form-text">The job this agent does. It goes into the agent's instructions; when a task uses several
+                  profiles they run in order and each sees the previous results.</div>
+              </div>
+              <fieldset class="mb-3">
+                <legend class="form-label fw-semibold fs-6 mb-1">Access</legend>
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="pm-access" id="pm-access-edit" value="edit">
+                  <label class="form-check-label" for="pm-access-edit">Can edit files
+                    <span class="text-body-secondary">— edits go to a copy and wait for your review</span></label>
+                </div>
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="pm-access" id="pm-access-ro" value="ro">
+                  <label class="form-check-label" for="pm-access-ro">Read-only
+                    <span class="text-body-secondary">— plans, reviews and answers, never changes files</span></label>
+                </div>
+              </fieldset>
+              <div class="mb-3">
+                <label class="form-label fw-semibold" for="pm-name">Profile name</label>
+                <input class="form-control form-control-sm" id="pm-name" maxlength="128" required>
+                <div class="form-text">Suggested from the agent and role until you type your own.</div>
+              </div>
+              <details class="mb-3" id="pm-advanced">
+                <summary class="fw-semibold">Advanced</summary>
+                <div class="row g-2 mt-1">
+                  <div class="col-sm-6">
+                    <label class="form-label" for="pm-model">Model</label>
+                    <input class="form-control form-control-sm" id="pm-model" maxlength="128" list="pm-model-options" placeholder="Agent's default">
+                    <datalist id="pm-model-options"></datalist>
+                    <div class="form-text">Leave blank to use the CLI's default.</div>
+                  </div>
+                  <div class="col-sm-3">
+                    <label class="form-label" for="pm-timeout">Time limit (min)</label>
+                    <input class="form-control form-control-sm" id="pm-timeout" type="number" min="1" max="60" step="1">
+                  </div>
+                  <div class="col-sm-3" id="pm-maxturns-wrap">
+                    <label class="form-label" for="pm-maxturns">Max turns</label>
+                    <input class="form-control form-control-sm" id="pm-maxturns" type="number" min="1" max="200" step="1" placeholder="No limit">
+                  </div>
+                  <div class="col-12" id="pm-commands-wrap">
+                    <label class="form-label" for="pm-commands">Shell commands it may run</label>
+                    <textarea class="form-control form-control-sm mono" id="pm-commands" rows="3" spellcheck="false"
+                              placeholder="None (recommended unless needed)&#10;npm test&#10;python -m pytest"></textarea>
+                    <div class="form-text" id="pm-commands-help">
+                      One command prefix per line. Run headless, Antigravity refuses every other shell command (it can still read,
+                      search and edit files with its own tools). Allowed commands run in the agent container without a sandbox and
+                      can read or write anything it can, so list only what the agent truly needs, such as your test command.
+                      Not used for read-only profiles.
+                    </div>
+                  </div>
+                </div>
+              </details>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch" id="pm-enabled">
+                <label class="form-check-label" for="pm-enabled">Enabled (can be used in tasks)</label>
+              </div>
+              <div class="alert alert-danger py-1 px-2 mt-3 mb-0 d-none" id="pm-error" role="alert"></div>
+            </form>
+
+            <div class="settings-footer">
+              <div id="pm-list-footer" class="d-flex w-100">
+                <button type="button" class="btn btn-sm btn-primary" id="pm-new">+ New profile</button>
+              </div>
+              <div id="pm-form-footer" class="d-flex w-100 gap-1 d-none">
+                <button type="button" class="btn btn-sm btn-outline-danger" id="pm-delete">Delete</button>
+                <button type="button" class="btn btn-sm btn-secondary ms-auto" id="pm-back">Cancel</button>
+                <button type="submit" form="pm-form" class="btn btn-sm btn-primary" id="pm-save">Save</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- default lineup -->
+          <section class="tab-pane fade" id="settings-lineup" role="tabpanel" aria-labelledby="settings-tab-lineup">
+            <h6>Default lineup</h6>
+            <p class="text-body-secondary mb-2">The agents every new task starts with. Tick profiles in the order they should
+              run; each one sees the earlier results. You can still change the lineup for a single task under
+              <strong>New task → Change for this task</strong>. Saved for your account.</p>
+            <div id="lineup-editor" class="list mb-2"></div>
+            <div id="lineup-pipeline" class="meta mb-2" aria-live="polite"></div>
+            <div class="settings-footer d-flex gap-1">
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="lineup-clear">Clear</button>
+              <button type="button" class="btn btn-sm btn-primary ms-auto" id="lineup-save">Save default lineup</button>
+            </div>
+          </section>
+
+          <!-- project checks -->
+          <section class="tab-pane fade" id="settings-checks" role="tabpanel" aria-labelledby="settings-tab-checks">
+            <h6>Project checks <span class="text-body-secondary fw-normal" id="pc-project"></span></h6>
+            <p class="text-body-secondary mb-2">Settings for agents working on this project, and the commands a
+              <strong>Verify</strong> step runs. A Verify step is a profile whose agent is “Checks”: it runs these commands
+              (not an AI) and passes the real results to the next steps.</p>
+            <div id="pc-none" class="text-body-secondary d-none">Open a project first.</div>
+            <form id="pc-form" class="d-none" novalidate autocomplete="off">
+              <div class="mb-3">
+                <label class="form-label fw-semibold" for="pc-commands">Check commands</label>
+                <textarea class="form-control form-control-sm mono" id="pc-commands" rows="3" spellcheck="false"
+                          placeholder="python manage.py makemigrations --check --dry-run&#10;python -m pytest -q"></textarea>
+                <div class="form-text">One per line, run in order in a throwaway copy of the agents' work (what they write is
+                  discarded). All run even if one fails. Plain commands only: no pipes, redirects or shells.</div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label fw-semibold" for="pc-env">Environment for agents and checks</label>
+                <textarea class="form-control form-control-sm mono" id="pc-env" rows="2" spellcheck="false"
+                          placeholder="DJANGO_SETTINGS_MODULE=myproject.settings_test"></textarea>
+                <div class="form-text">NAME=value lines, set for every agent and check command. Point your settings at a
+                  local test database here. Database settings (DATABASE_URL, DB_*, PG*, …), URLs with passwords, and
+                  secret-looking variables are always removed and can't be set.</div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label fw-semibold" for="pc-venv">Python environment</label>
+                <input class="form-control form-control-sm mono" id="pc-venv" maxlength="200" placeholder="Auto: .venv, venv or env">
+                <div class="form-text" id="pc-venv-status"></div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label fw-semibold" for="pc-exclude">Never copy to agents</label>
+                <textarea class="form-control form-control-sm mono" id="pc-exclude" rows="2" spellcheck="false"
+                          placeholder="*.csv&#10;data/prod_*"></textarea>
+                <div class="form-text">Patterns for files agents must never see, such as data exports. A pattern without “/”
+                  matches a file or folder name anywhere. Always left out: .env files, keys and credential files.</div>
+              </div>
+              <div class="alert alert-danger py-1 px-2 mb-0 d-none" id="pc-error" role="alert"></div>
+              <div id="pc-readonly-note" class="text-body-secondary d-none">Only administrators can change project checks.</div>
+            </form>
+            <div class="settings-footer d-flex gap-1">
+              <button type="submit" form="pc-form" class="btn btn-sm btn-primary ms-auto" id="pc-save">Save project checks</button>
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </div>
+  </div></div>
+</div>
+
+<div class="modal fade" id="git-settings-modal" tabindex="-1" aria-hidden="true" aria-labelledby="gs-title">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable modal-fullscreen-sm-down"><div class="modal-content">
+    <div class="modal-header py-2">
+      <h5 class="modal-title h6" id="gs-title">Git settings</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    </div>
+    <div class="modal-body small">
+
+      <section class="mb-4" aria-labelledby="gs-remote-h">
+        <h6 class="fw-semibold" id="gs-remote-h">This project's remote</h6>
+        <div id="gs-remotes" class="mb-2"></div>
+        <div id="gs-access" class="d-none"></div>
+      </section>
+
+      <section class="mb-4" aria-labelledby="gs-cred-h">
+        <h6 class="fw-semibold" id="gs-cred-h">Your Git logins</h6>
+        <p class="text-body-secondary mb-2">Push and pull over HTTPS use the login saved for the remote's host. Tokens are
+          stored encrypted on the server, are only sent to that host, and are never shown again.</p>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-2" id="gs-cred-table">
+            <thead><tr><th>Host</th><th>Username</th><th>Token</th><th>Last used</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <form id="gs-cred-form" class="border rounded p-2" novalidate autocomplete="off">
+          <div class="fw-semibold mb-2" id="gs-cred-form-title">Add a login</div>
+          <div class="row g-2">
+            <div class="col-sm-4">
+              <label class="form-label" for="gs-host">Host</label>
+              <input class="form-control form-control-sm" id="gs-host" value="github.com" maxlength="255" required>
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label" for="gs-username">Username</label>
+              <input class="form-control form-control-sm" id="gs-username" maxlength="128" required autocomplete="off">
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label" for="gs-token">Access token</label>
+              <input class="form-control form-control-sm" id="gs-token" type="password" maxlength="1000" autocomplete="new-password">
+            </div>
+          </div>
+          <div class="form-text" id="gs-token-help">
+            For GitHub, create a fine-grained token at
+            <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">github.com → Settings → Developer settings → Fine-grained tokens</a>:
+            choose the repositories, then under <em>Repository permissions</em> set <strong>Contents: Read and write</strong>.
+            Your GitHub password will not work here.
+          </div>
+          <div class="alert alert-danger py-1 px-2 mt-2 mb-0 d-none" id="gs-cred-error" role="alert"></div>
+          <div class="d-flex gap-1 mt-2">
+            <button type="button" class="btn btn-sm btn-secondary d-none" id="gs-cred-cancel">Cancel edit</button>
+            <button type="submit" class="btn btn-sm btn-primary ms-auto" id="gs-cred-save">Save login</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="mb-4" aria-labelledby="gs-id-h">
+        <h6 class="fw-semibold" id="gs-id-h">Commit author</h6>
+        <form id="gs-id-form" class="row g-2 align-items-end" novalidate>
+          <div class="col-sm-5">
+            <label class="form-label" for="gs-name">Name</label>
+            <input class="form-control form-control-sm" id="gs-name" maxlength="150">
+          </div>
+          <div class="col-sm-5">
+            <label class="form-label" for="gs-email">Email</label>
+            <input class="form-control form-control-sm" id="gs-email" type="email" maxlength="254">
+          </div>
+          <div class="col-sm-2"><button type="submit" class="btn btn-sm btn-outline-primary w-100">Save</button></div>
+          <div class="form-text col-12">Used for commits you make here. To have GitHub link commits to your account, use an
+            email registered on it (or your GitHub <code>…@users.noreply.github.com</code> address).</div>
+        </form>
+      </section>
+
+      <section class="mb-4" aria-labelledby="gs-ai-h">
+        <h6 class="fw-semibold" id="gs-ai-h">AI commit messages</h6>
+        <form id="gs-ai-form" class="row g-2 align-items-end" novalidate>
+          <div class="col-sm-5">
+            <label class="form-label" for="gs-ai-adapter">Agent</label>
+            <select class="form-select form-select-sm" id="gs-ai-adapter"></select>
+          </div>
+          <div class="col-sm-5">
+            <label class="form-label" for="gs-ai-model">Model</label>
+            <input class="form-control form-control-sm" id="gs-ai-model" maxlength="100" list="gs-ai-models"
+                   autocomplete="off" spellcheck="false">
+            <datalist id="gs-ai-models"></datalist>
+          </div>
+          <div class="col-sm-2"><button type="submit" class="btn btn-sm btn-outline-primary w-100">Save</button></div>
+          <div class="form-text col-12" id="gs-ai-help">Used by ✨ Generate in the Git panel. Leave the model blank for
+            the agent's default. Bigger models write slightly better messages but cost more per message.</div>
+        </form>
+      </section>
+
+      <section aria-labelledby="gs-le-h">
+        <h6 class="fw-semibold" id="gs-le-h">Line endings (this project)</h6>
+        <div class="row g-2 align-items-center">
+          <div class="col-sm-6">
+            <select class="form-select form-select-sm" id="gs-line-endings" aria-describedby="gs-le-status"></select>
+          </div>
+          <div class="col-sm-6 text-body-secondary" id="gs-le-status"></div>
+        </div>
+        <div class="form-text">Repositories cloned on Windows usually have CRLF line endings in the files while Git stores
+          LF (Git's <code>core.autocrlf</code>). Without the matching setting every file looks modified. Code Studio applies
+          this in memory only and does not change the repository's config.</div>
+      </section>
+    </div>
+    <div class="modal-footer py-1">
+      <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Done</button>
+    </div>
+  </div></div>
+</div>
+
+<div class="modal fade" id="conflict-modal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+  <div class="modal-dialog modal-xl"><div class="modal-content">
+    <div class="modal-header py-2">
+      <h5 class="modal-title h6">Save conflict: <span id="conflict-path" class="mono"></span></h5>
+    </div>
+    <div class="modal-body p-0">
+      <div class="small px-3 py-2 text-body-secondary">The file changed on disk after you opened it. Left: version on disk. Right: your version (editable — merge here if needed).</div>
+      <div id="conflict-diff" class="conflict-diff"></div>
+    </div>
+    <div class="modal-footer py-1">
+      <button class="btn btn-sm btn-secondary" id="conflict-cancel">Keep editing</button>
+      <button class="btn btn-sm btn-outline-info" id="conflict-take-disk">Use disk version</button>
+      <button class="btn btn-sm btn-warning" id="conflict-overwrite">Save my (merged) version</button>
+    </div>
+  </div></div>
+</div>
+
+<div id="toasts" class="toast-container position-fixed top-0 start-50 translate-middle-x p-3 mt-4"></div>
+
+<script src="{% asset 'vendor/bootstrap/bootstrap.bundle.min.js' %}"></script>
+{% if system_terminal %}<script src="{% asset 'vendor/xterm/xterm.js' %}"></script>
+<script src="{% asset 'vendor/xterm/addon-fit.js' %}"></script>
+{% endif %}<script src="{% asset 'vendor/monaco/vs/loader.js' %}"></script>
+<script src="{% asset 'ide/app.js' %}"></script>
+</body>
+</html>

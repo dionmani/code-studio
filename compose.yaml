@@ -1,0 +1,65 @@
+# Code Studio on Docker (Unraid). See docs/DOCKER.md.
+# On Unraid this file is installed as /mnt/user/appdata/code-studio-ide/docker-compose.yml
+# and managed as the "code_studio_ide" stack in the Docker tab (Compose Manager).
+#   cp .env.example .env   # then edit
+#   docker compose up -d --build
+name: code_studio_ide
+
+x-common: &common
+  image: code-studio-ide:latest       # built once (by the ide service), shared by both
+  restart: unless-stopped
+  user: "${PUID:-99}:${PGID:-100}"    # Unraid nobody:users by default
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  environment: &env
+    TZ: ${TZ:-UTC}
+    HOME: /home/app
+    CODE_STUDIO_ENGINE_TOKEN: ${CODE_STUDIO_ENGINE_TOKEN:?set CODE_STUDIO_ENGINE_TOKEN in .env}
+
+services:
+  ide:
+    <<: *common
+    container_name: code-studio-ide
+    build: ${CODE_STUDIO_SRC:-.}      # Unraid stack: ./src (uploaded by scripts/deploy_unraid.ps1)
+    command: ["/app/docker/ide.sh"]
+    ports: ["${CODE_STUDIO_PORT:-8197}:8000"]
+    environment:
+      <<: *env
+      CODE_STUDIO_DATA_DIR: /data
+      CODE_STUDIO_ENGINE_URL: http://engine:8765
+      CODE_STUDIO_ALLOWED_HOSTS: ${CODE_STUDIO_ALLOWED_HOSTS:-localhost}
+      CODE_STUDIO_CSRF_TRUSTED_ORIGINS: ${CODE_STUDIO_CSRF_TRUSTED_ORIGINS:-}
+      CODE_STUDIO_SECURE_COOKIES: ${CODE_STUDIO_SECURE_COOKIES:-0}
+      CODE_STUDIO_ADMIN_USER: ${CODE_STUDIO_ADMIN_USER:-admin}
+      CODE_STUDIO_ADMIN_PASSWORD: ${CODE_STUDIO_ADMIN_PASSWORD:-}
+      CODE_STUDIO_ROOT_ALIAS: ${CODE_STUDIO_ROOT_ALIAS:-coding}
+    volumes:
+      - ${CODE_STUDIO_PROJECTS:?set CODE_STUDIO_PROJECTS in .env}:/projects      # read-write: you edit here
+      - ${CODE_STUDIO_APPDATA:?set CODE_STUDIO_APPDATA in .env}/ide-data:/data
+      - ${CODE_STUDIO_APPDATA}/ide-home:/home/app
+    depends_on: [engine]
+
+  engine:
+    <<: *common
+    container_name: code-studio-engine
+    pull_policy: never                # local image only; never try Docker Hub
+    command: ["/app/docker/engine.sh"]
+    expose: ["8765"]                  # internal network only, never published
+    # Codex's own per-task sandbox (bubblewrap) needs to create user namespaces,
+    # which Docker's default seccomp profile forbids. Verified on Unraid 6.18:
+    # with this, Codex can write only inside the task workspace (or nothing,
+    # read-only). The container stays non-root, with no capabilities and
+    # no-new-privileges. The IDE container keeps the default profile.
+    security_opt: ["no-new-privileges:true", "seccomp=unconfined"]
+    environment:
+      <<: *env
+      CODE_STUDIO_DATA_DIR: /engine-data
+      CODE_STUDIO_ENGINE_HOST: 0.0.0.0
+      CODE_STUDIO_ENGINE_ALLOWED_ROOTS: /projects
+      # Legacy: only seeds the Antigravity switch the first time engine-data/engine/settings.json is
+      # created. After that it is turned on/off in the IDE (Settings > Agent team) with no restart.
+      CODE_STUDIO_ENGINE_ENABLE_ANTIGRAVITY: ${CODE_STUDIO_ENGINE_ENABLE_ANTIGRAVITY:-0}
+    volumes:
+      - ${CODE_STUDIO_PROJECTS}:/projects:ro    # agents only ever see staging copies
+      - ${CODE_STUDIO_APPDATA}/engine-data:/engine-data
+      - ${CODE_STUDIO_APPDATA}/agent-home:/home/app   # Claude / Codex / Antigravity logins persist here

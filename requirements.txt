@@ -1,0 +1,21 @@
+# Code Studio — pinned to the versions verified on Windows 11 / Python 3.12 (2026-11-17).
+# IDE service
+Django==5.2.19
+channels==4.3.2
+daphne==4.2.3
+Twisted==26.10.0
+dulwich==1.2.21
+httpx==0.28.1
+psutil==7.2.2
+whitenoise==6.9.0
+# Agent Engine service
+fastapi==0.163.2
+starlette==1.10.0
+uvicorn==0.54.0
+# Tests / verification
+pytest==9.2.0
+pytest-django==4.14.0
+pytest-asyncio==1.5.0
+playwright==1.65.2
+# NOTE: do not install `ujson`. FastAPI imports it opportunistically and Windows
+# Application Control (Smart App Control) blocks its unsigned DLL.

@@ -1,0 +1,11 @@
+.venv/
+.e2e/
+.pytest_tmp/
+.pytest_cache/
+**/__pycache__/
+*.pyc
+.git/
+.env
+*.sqlite3
+staticfiles/
+node_modules/

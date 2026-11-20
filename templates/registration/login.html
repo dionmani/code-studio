@@ -1,0 +1,33 @@
+{% load static assets %}<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Code Studio</title>
+  <link rel="icon" type="image/png" href="{% asset 'ide/icon.png' %}">
+  <link rel="stylesheet" href="{% asset 'vendor/bootstrap/bootstrap.min.css' %}">
+  <link rel="stylesheet" href="{% asset 'ide/ide.css' %}">
+</head>
+<body class="login-page d-flex align-items-center justify-content-center">
+  <main class="card shadow login-card">
+    <div class="card-body p-4">
+      <h1 class="h4 mb-1">Code Studio</h1>
+      <p class="text-body-secondary small mb-4">Self-hosted IDE &amp; agent orchestration</p>
+      {% if form.errors %}<div class="alert alert-danger py-2 small" role="alert">Invalid username or password.</div>{% endif %}
+      <form method="post" action="{% url 'login' %}" id="login-form">
+        {% csrf_token %}
+        <div class="mb-3">
+          <label class="form-label" for="id_username">Username</label>
+          <input class="form-control" type="text" name="username" id="id_username" autocomplete="username" autofocus required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="id_password">Password</label>
+          <input class="form-control" type="password" name="password" id="id_password" autocomplete="current-password" required>
+        </div>
+        <input type="hidden" name="next" value="{{ next|default:'/' }}">
+        <button class="btn btn-primary w-100" type="submit">Sign in</button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>

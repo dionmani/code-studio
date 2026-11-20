@@ -1,0 +1,80 @@
+{% load static assets %}<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run Locally · Code Studio</title>
+  <link rel="icon" type="image/png" href="{% asset 'ide/icon.png' %}">
+  <link rel="stylesheet" href="{% asset 'vendor/bootstrap/bootstrap.min.css' %}">
+  <link rel="stylesheet" href="{% asset 'ide/ide.css' %}">
+</head>
+<body class="login-page">
+<main class="container py-4 local-page">
+  <p class="mb-3"><a href="/" class="link-secondary small">&larr; Back to Code Studio</a></p>
+
+  {% if is_local %}
+    <h1 class="h3 mb-1">This is your local copy</h1>
+    <p class="text-body-secondary">Running on this PC, version <code id="local-build">{{ build.version }} ({{ build.build }})</code>.</p>
+
+    <section class="card mb-3"><div class="card-body">
+      <h2 class="h5">Updates</h2>
+      {% if update.error %}
+        <p class="mb-0 text-warning" id="update-state">{{ update.error }}</p>
+      {% elif update.update_available %}
+        <p class="text-warning fw-semibold" id="update-state">
+          An update is available: the server at <code>{{ update.server_url }}</code> runs
+          {{ update.server.version }} ({{ update.server.build }}).</p>
+        <p class="mb-1">To install it, save your work, then either:</p>
+        <ul class="mb-0">
+          <li>start Code Studio again from its shortcut. It offers to restart and install the update (you don't need to
+            close it first), or</li>
+          <li>run <strong>Update Code Studio</strong> from the Start Menu.</li>
+        </ul>
+        <p class="small text-body-secondary mt-2 mb-0">Closing the browser doesn't stop Code Studio. Its console window does.</p>
+      {% else %}
+        <p class="mb-0 text-success" id="update-state">Up to date with <code>{{ update.server_url }}</code>.</p>
+      {% endif %}
+      <p class="small text-body-secondary mt-3 mb-0">Updates replace the program files only. Your sign-in, projects,
+        settings and data stay as they are, and the database is backed up before every update.</p>
+    </div></section>
+  {% else %}
+    <h1 class="h3 mb-1">Run Code Studio on this PC</h1>
+    <p class="text-body-secondary">A local copy runs directly on Windows, using your own Python, drivers, databases and
+      folders. That helps with projects that need Windows-only things (SQL Server/ODBC, a Windows <code>.venv</code>)
+      which this server's Linux container doesn't have.</p>
+
+    <section class="card mb-3"><div class="card-body">
+      <h2 class="h5">Install (Windows 10/11)</h2>
+      <ol class="mb-3">
+        <li>Download the package. It is version <code id="server-build">{{ build.version }} ({{ build.build }})</code>, the same code this server runs.</li>
+        <li>Right-click the zip, choose <strong>Extract All…</strong>, then open the extracted folder.</li>
+        <li>Double-click <strong>Install Code Studio.cmd</strong>. If Windows shows “Windows protected your PC”,
+          click <strong>More info → Run anyway</strong> (the installer isn't code-signed).</li>
+        <li>Answer the prompts: an admin password for the local copy, your projects folder and, optionally, the AI agent tools.</li>
+        <li>Start it from the <strong>Code Studio</strong> shortcut on your desktop or in the Start Menu.</li>
+      </ol>
+      <a class="btn btn-primary" id="download-btn" href="/local/download">Download for Windows</a>
+    </div></section>
+
+    <section class="card mb-3"><div class="card-body small">
+      <h2 class="h6">What gets installed</h2>
+      <ul class="mb-2">
+        <li><strong>Python 3.12</strong>, via <code>winget</code>, if it isn't installed already.</li>
+        <li>Code Studio in <code>%LOCALAPPDATA%\Programs\CodeStudio</code>: <code>app\</code> (program, replaced on update),
+          <code>venv\</code>, <code>data\</code> (database and settings, kept) and <code>config.json</code> (kept).</li>
+        <li>Optional: Node.js plus the Claude Code and Codex command-line tools for AI agents.</li>
+      </ul>
+      <h2 class="h6">Keeping it up to date</h2>
+      <p class="mb-2">Your local copy checks this server each time it starts and offers the update when this server has a
+        newer build. It also shows <span class="badge text-bg-warning">Update available</span> in its top bar.
+        Updating downloads the new package from here and keeps your local sign-in, projects and settings.</p>
+      <h2 class="h6">Good to know</h2>
+      <ul class="mb-0">
+        <li>The local copy is separate: its own admin sign-in, project list and agent logins. Nothing syncs with this server.</li>
+        <li>The package contains a download token tied to your account, used only to fetch updates. Don't share the zip.</li>
+      </ul>
+    </div></section>
+  {% endif %}
+</main>
+</body>
+</html>
