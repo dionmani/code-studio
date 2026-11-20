@@ -1,7 +1,7 @@
 # Code Studio — Project Design Document
 
-**Status:** Initial specification / architecture proposal  
-**Version:** 0.1  
+**Status:** Initial specification / architecture proposal
+**Version:** 0.1
 **Date:** 2026-11-15
 
 ## 1. Vision
